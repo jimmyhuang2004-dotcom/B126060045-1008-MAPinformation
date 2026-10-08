@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>台灣即時開放資料地圖 - YouBike 2.0 即時動態</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  
+  <!-- Leaflet MarkerCluster CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  
+  <!-- Google Fonts: Inter -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">
+
+  <style>
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    }
+    
+    /* 自訂 Leaflet Popup 樣式 */
+    .leaflet-popup-content-wrapper {
+      padding: 0;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+    }
+    .leaflet-popup-content {
+      margin: 0;
+      width: 280px !important;
+    }
+    .leaflet-container {
+      font-family: inherit;
+    }
+    
+    /* 自訂脈衝動畫標籤 */
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.15); opacity: 0.3; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+    .pulse-location {
+      animation: pulse-ring 2s infinite ease-in-out;
+    }
+
+    /* 隱藏滾動條但保持滾動 */
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 h-screen flex flex-col overflow-hidden">
+
+  <!-- 頂部導航列 -->
+  <header class="bg-slate-900 text-white px-4 py-3 shadow-md flex items-center justify-between z-20 shrink-0">
+    <div class="flex items-center space-x-3">
+      <div class="bg-emerald-500 text-slate-900 p-2 rounded-lg font-bold text-lg flex items-center justify-center shadow-lg">
+        <i class="fa-solid fa-person-biking"></i>
+      </div>
+      <div>
+        <h1 class="font-bold text-lg leading-tight flex items-center gap-2">
+          即時 YouBike 2.0 地圖
+          <span class="bg-emerald-500/20 text-emerald-400 text-xs px-2 py-0.5 rounded-full font-medium border border-emerald-500/30">即時連線</span>
+        </h1>
+        <p class="text-xs text-slate-400 hidden sm:block">結合 Leaflet.js + OpenStreetMap 政府開放資料串接</p>
+      </div>
+    </div>
+
+    <!-- 右側操作按鈕 -->
+    <div class="flex items-center space-x-2">
+      <!-- 自動刷新倒數 -->
+      <div id="refreshBadge" class="hidden md:flex items-center space-x-1.5 bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700 text-xs text-slate-300">
+        <i class="fa-solid fa-arrows-rotate text-emerald-400 animate-spin-slow"></i>
+        <span>自動更新: <strong id="countdown" class="text-white">60</strong>s</span>
+      </div>
+
+      <!-- 手動重整按鈕 -->
+      <button id="btnFetchData" class="bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-200 p-2 sm:px-3 sm:py-1.5 rounded-lg text-xs font-medium border border-slate-700 transition flex items-center gap-1.5" title="重新載入資料">
+        <i class="fa-solid fa-rotate-right"></i>
+        <span class="hidden sm:inline">重新整理</span>
+      </button>
+
+      <!-- 定位按鈕 -->
+      <button id="btnLocate" class="bg-emerald-600 hover:bg-emerald-500 text-white p-2 sm:px-3 sm:py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1.5 shadow-md" title="目前位置">
+        <i class="fa-solid fa-location-crosshairs"></i>
+        <span class="hidden sm:inline">我的位置</span>
+      </button>
+
+      <!-- 移動端側邊欄開關 -->
+      <button id="btnToggleSidebar" class="md:hidden bg-slate-800 text-slate-200 p-2 rounded-lg border border-slate-700">
+        <i class="fa-solid fa-bars"></i>
+      </button>
+    </div>
+  </header>
+
+  <!-- 主體區域 -->
+  <div class="flex-1 flex relative overflow-hidden">
+
+    <!-- 左側面板 (側邊欄) -->
+    <aside id="sidebar" class="absolute md:relative z-10 w-full md:w-80 lg:w-96 bg-white h-full shadow-xl flex flex-col transition-transform duration-300 ease-in-out -translate-x-full md:translate-x-0">
+      
+      <!-- 選擇區域與數據摘要 -->
+      <div class="p-4 bg-slate-50 border-b border-slate-200 space-y-3">
+        <!-- 縣市選擇器 -->
+        <div>
+          <label class="block text-xs font-semibold text-slate-500 mb-1">請選擇資料區域</label>
+          <div class="relative">
+            <select id="citySelect" class="w-full bg-white border border-slate-300 text-slate-800 text-sm rounded-lg p-2.5 pr-8 appearance-none focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 font-medium">
+              <option value="taipei" selected>🏙️ 台北市 YouBike 2.0</option>
+              <option value="newtaipei">🌆 新北市 YouBike 2.0</option>
+              <option value="kaohsiung">港 ☀️ 高雄市 YouBike 2.0</option>
+            </select>
+            <i class="fa-solid fa-chevron-down absolute right-3 top-3.5 text-slate-400 text-xs pointer-events-none"></i>
+          </div>
+        </div>
+
+        <!-- 即時統計面板 -->
+        <div class="grid grid-cols-3 gap-2 text-center">
+          <div class="bg-white p-2 rounded-lg border border-slate-200 shadow-sm">
+            <span class="block text-[10px] text-slate-400 font-medium">總站點數</span>
+            <span id="statTotalStations" class="text-base font-bold text-slate-800">0</span>
+          </div>
+          <div class="bg-emerald-50 p-2 rounded-lg border border-emerald-100 shadow-sm">
+            <span class="block text-[10px] text-emerald-600 font-medium">可借車輛</span>
+            <span id="statAvailableBikes" class="text-base font-bold text-emerald-700">0</span>
+          </div>
+          <div class="bg-slate-100 p-2 rounded-lg border border-slate-200 shadow-sm">
+            <span class="block text-[10px] text-slate-500 font-medium">可還空位</span>
+            <span id="statEmptySlots" class="text-base font-bold text-slate-700">0</span>
+          </div>
+        </div>
+
+        <!-- 搜尋與行政區篩選器 -->
+        <div class="space-y-2">
+          <div class="relative">
+            <i class="fa-solid fa-magnifying-glass absolute left-3 top-3 text-slate-400 text-xs"></i>
+            <input type="text" id="searchInput" placeholder="搜尋站點名稱或地址..." class="w-full pl-8 pr-8 py-2 bg-white border border-slate-300 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <button id="btnClearSearch" class="hidden absolute right-2.5 top-2 text-slate-400 hover:text-slate-600">
+              <i class="fa-solid fa-xmark text-xs"></i>
+            </button>
+          </div>
+
+          <div class="flex gap-2">
+            <select id="districtFilter" class="w-1/2 bg-white border border-slate-300 text-slate-700 text-xs rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-emerald-500">
+              <option value="all">所有行政區</option>
+            </select>
+            
+            <select id="statusFilter" class="w-1/2 bg-white border border-slate-300 text-slate-700 text-xs rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-emerald-500">
+              <option value="all">所有車輛狀態</option>
+              <option value="available">🟢 即可借車 (>0)</option>
+              <option value="empty_slots">🅿️ 有空位可還 (>0)</option>
+              <option value="empty">🔴 無車可借 (0)</option>
+              <option value="favorite">⭐ 我的最愛</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- 站點清單 -->
+      <div class="flex-1 overflow-y-auto no-scrollbar p-3 space-y-2" id="stationList">
+        <!-- 動態渲染清單內容 -->
+        <div class="text-center py-8 text-slate-400 text-xs">
+          <i class="fa-solid fa-spinner animate-spin text-lg mb-2 text-emerald-500"></i>
+          <p>正在載入開放資料...</p>
+        </div>
+      </div>
+
+      <!-- 頁腳說明 -->
+      <div class="p-2.5 bg-slate-100 border-t border-slate-200 text-[11px] text-slate-500 text-center flex justify-between items-center px-4">
+        <span>資料來源：政府開放資料 API</span>
+        <button id="btnCloseSidebar" class="md:hidden text-slate-600 font-bold">關閉 ✕</button>
+      </div>
+    </aside>
+
+    <!-- 右側地圖區域 -->
+    <main class="flex-1 h-full relative">
+      <div id="map" class="w-full h-full z-0"></div>
+
+      <!-- 地圖樣式切換按鈕 (浮動) -->
+      <div class="absolute top-4 right-4 z-[500] bg-white rounded-lg shadow-md border border-slate-200 p-1 flex space-x-1">
+        <button id="btnTileStandard" class="px-2.5 py-1 text-xs font-medium rounded bg-emerald-600 text-white transition">標準地圖</button>
+        <button id="btnTileLight" class="px-2.5 py-1 text-xs font-medium rounded text-slate-600 hover:bg-slate-100 transition">淺色簡約</button>
+      </div>
+
+      <!-- 圖例說明 (浮動) -->
+      <div class="absolute bottom-6 right-4 z-[500] bg-white/90 backdrop-blur-md rounded-lg shadow-lg border border-slate-200 p-3 text-xs space-y-1.5 hidden sm:block">
+        <div class="font-bold text-slate-700 text-[11px] mb-1">圖例說明</div>
+        <div class="flex items-center gap-2">
+          <span class="w-3 h-3 rounded-full bg-emerald-500 inline-block"></span>
+          <span class="text-slate-600">可借車輛充足 (≥ 5 輛)</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="w-3 h-3 rounded-full bg-amber-500 inline-block"></span>
+          <span class="text-slate-600">可借車輛偏少 (1-4 輛)</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="w-3 h-3 rounded-full bg-rose-500 inline-block"></span>
+          <span class="text-slate-600">無車可借 (0 輛)</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="w-3 h-3 rounded-full bg-slate-400 inline-block"></span>
+          <span class="text-slate-600">系統維護中 / 停用</span>
+        </div>
+      </div>
+    </main>
+
+  </div>
+
+  <script>
+    // 全域變數與 API 設定
+    const API_CONFIGS = {
+      taipei: {
+        name: '台北市',
+        url: 'https://tcgbusfs.blob.core.windows.net/dotapp/youbike/new_stage/youbike_newsletter.json',
+        center: [25.0330, 121.5654], // 台北 101 附近
+        zoom: 14
+      },
+      newtaipei: {
+        name: '新北市',
+        url: 'https://data.ntpc.gov.tw/api/v1/rest/datastore/382000000A-000352-001?$top=1000&$format=json',
+        center: [25.0122, 121.4658], // 板橋車站附近
+        zoom: 14
+      },
+      kaohsiung: {
+        name: '高雄市',
+        url: 'https://api.kcg.gov.tw/api/service/Get/b4dd9c40-9a70-4235-ac8b-42e1281e813f',
+        center: [22.6273, 120.3014], // 高雄中央公園附近
+        zoom: 14
+      }
+    };
+
+    let currentCityKey = 'taipei';
+    let rawDataList = [];
+    let filteredDataList = [];
+    let favoriteIds = JSON.parse(localStorage.getItem('yb_favorites') || '[]');
+    let countdownSec = 60;
+    let countdownTimer = null;
+
+    // 地圖相關物件
+    let map = null;
+    let markerClusterGroup = null;
+    let userMarker = null;
+    let activeTileLayer = null;
+    const markersMap = new Map(); // 快速定位 Marker 物件 ID -> Marker
+
+    // 圖層來源
+    const TILE_LAYERS = {
+      standard: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> 貢獻者'
+      }),
+      light: L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap &copy; CARTO'
+      })
+    };
+
+    // 頁面初始化
+    window.onload = function() {
+      initMap();
+      setupEventListeners();
+      fetchCityData(currentCityKey);
+      startCountdown();
+    };
+
+    // 初始化 Leaflet 地圖
+    function initMap() {
+      const config = API_CONFIGS[currentCityKey];
+      map = L.map('map', {
+        center: config.center,
+        zoom: config.zoom,
+        zoomControl: false
+      });
+
+      // 設定預設圖層
+      activeTileLayer = TILE_LAYERS.standard;
+      activeTileLayer.addTo(map);
+
+      // 自訂 Zoom 控制按鈕位置
+      L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+      // 初始化 MarkerCluster 圖層
+      markerClusterGroup = L.markerClusterGroup({
+        chunkedLoading: true,
+        spiderfyOnMaxZoom: true,
+        showCoverageOnHover: false,
+        maxClusterRadius: 40
+      });
+      map.addLayer(markerClusterGroup);
+    }
+
+    // 獲取縣市即時 API 資料
+    async function fetchCityData(cityKey) {
+      const config = API_CONFIGS[cityKey];
+      showLoadingState();
+
+      try {
+        const response = await fetch(config.url);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        
+        const data = await response.json();
+        rawDataList = normalizeData(cityKey, data);
+        
+        // 移除非法經緯度
+        rawDataList = rawDataList.filter(item => item.lat > 0 && item.lng > 0);
+
+        // 更新行政區選單
+        updateDistrictDropdown();
+        
+        // 套用篩選並更新 UI
+        applyFilters();
+
+      } catch (error) {
+        console.warn(`[API] 抓取 ${config.name} 資料失敗，載入模擬示範資料:`, error);
+        // 使用模擬備援資料確保頁面依然可以體驗
+        rawDataList = generateFallbackData(cityKey);
+        updateDistrictDropdown();
+        applyFilters();
+      } finally {
+        resetCountdown();
+      }
+    }
+
+    // 將不同 API 的欄位名稱統一化 (Normalize)
+    function normalizeData(cityKey, rawData) {
+      if (cityKey === 'taipei') {
+        // 台北市資料格式 (JSON Array or Object)
+        const list = Array.isArray(rawData) ? rawData : Object.values(rawData);
+        return list.map(item => ({
+          id: item.sno,
+          name: item.sna ? item.sna.replace('YouBike2.0_', '') : '未命名站點',
+          district: item.sarea || '未知區',
+          address: item.ar || '無詳細地址',
+          tot: parseInt(item.tot || 0),
+          sbi: parseInt(item.sbi || 0),
+          bemp: parseInt(item.bemp || 0),
+          act: item.act === '1',
+          lat: parseFloat(item.lat),
+          lng: parseFloat(item.lng),
+          updateTime: formatTime(item.mday)
+        }));
+      } else if (cityKey === 'newtaipei') {
+        // 新北市格式
+        const result = rawData.result?.records || rawData || [];
+        return result.map(item => ({
+          id: item.sno || item.sarea + item.sna,
+          name: item.sna ? item.sna.replace('YouBike2.0_', '') : '未命名站點',
+          district: item.sarea || '新北市',
+          address: item.ar || '無詳細地址',
+          tot: parseInt(item.tot || 0),
+          sbi: parseInt(item.sbi || 0),
+          bemp: parseInt(item.bemp || 0),
+          act: item.act === '1',
+          lat: parseFloat(item.lat),
+          lng: parseFloat(item.lng),
+          updateTime: item.mday ? formatTime(item.mday) : '即時'
+        }));
+      } else if (cityKey === 'kaohsiung') {
+        // 高雄市格式
+        const dataArr = Array.isArray(rawData) ? rawData : (rawData.data || []);
+        return dataArr.map(item => ({
+          id: item.StationID || item.sno,
+          name: item.StationName?.Zh_tw || item.sna || '未命名站點',
+          district: item.Sarea || '高雄市',
+          address: item.Ar || '無詳細地址',
+          tot: parseInt(item.BikesCapacity || item.tot || 0),
+          sbi: parseInt(item.AvailableRentBikes || item.sbi || 0),
+          bemp: parseInt(item.AvailableReturnBikes || item.bemp || 0),
+          act: true,
+          lat: parseFloat(item.StationLatitude || item.lat),
+          lng: parseFloat(item.StationLongitude || item.lng),
+          updateTime: '即時更新'
+        }));
+      }
+      return [];
+    }
+
+    // 渲染地圖上的圖標標記
+    function renderMarkers(dataList) {
+      markerClusterGroup.clearLayers();
+      markersMap.clear();
+
+      dataList.forEach(station => {
+        const statusColor = getStatusColorClass(station);
+        
+        // 建立自訂的 SVG Marker Icon
+        const customIcon = L.divIcon({
+          className: 'custom-leaflet-marker',
+          html: `
+            <div class="relative group">
+              <div class="w-8 h-8 rounded-full ${statusColor.bg} text-white flex items-center justify-center font-bold text-xs shadow-md border-2 border-white transition-transform hover:scale-110">
+                ${station.sbi}
+              </div>
+              <div class="w-2 h-2 ${statusColor.bg} rotate-45 absolute -bottom-1 left-3 border-r border-b border-white"></div>
+            </div>
+          `,
+          iconSize: [32, 32],
+          iconAnchor: [16, 36],
+          popupAnchor: [0, -32]
+        });
+
+        const marker = L.marker([station.lat, station.lng], { icon: customIcon });
+
+        // 生成高質感的 Popup HTML 內容
+        const isFav = favoriteIds.includes(station.id);
+        const percent = station.tot > 0 ? Math.round((station.sbi / station.tot) * 100) : 0;
+        
+        const popupContent = `
+          <div class="p-3 bg-white text-slate-800 rounded-lg">
+            <div class="flex items-start justify-between gap-2 mb-1.5">
+              <div>
+                <span class="inline-block bg-slate-100 text-slate-600 text-[10px] px-2 py-0.5 rounded font-semibold mb-1">${station.district}</span>
+                <h3 class="font-bold text-sm text-slate-900 leading-tight">YouBike 2.0_${station.name}</h3>
+              </div>
+              <button onclick="toggleFavorite('${station.id}')" class="text-slate-300 hover:text-amber-400 text-base transition">
+                <i class="fa-${isFav ? 'solid text-amber-400' : 'regular'} fa-star"></i>
+              </button>
+            </div>
+            
+            <p class="text-xs text-slate-500 mb-3 flex items-center gap-1">
+              <i class="fa-solid fa-location-dot text-slate-400"></i> ${station.address}
+            </p>
+
+            <!-- 車量數量比例條 -->
+            <div class="space-y-1 mb-3">
+              <div class="flex justify-between text-xs font-semibold">
+                <span class="text-emerald-600"><i class="fa-solid fa-bicycle"></i> 可借 ${station.sbi}</span>
+                <span class="text-slate-500"><i class="fa-solid fa-square-parking"></i> 可還 ${station.bemp}</span>
+              </div>
+              <div class="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden flex">
+                <div class="${statusColor.bg} h-2.5 transition-all duration-500" style="width: ${percent}%"></div>
+              </div>
+              <div class="text-[10px] text-slate-400 text-right">總總車格: ${station.tot}</div>
+            </div>
+
+            <!-- Popup 操作按鈕 -->
+            <div class="flex gap-2 pt-2 border-t border-slate-100">
+              <a href="https://www.google.com/maps/dir/?api=1&destination=${station.lat},${station.lng}" target="_blank" rel="noopener noreferrer" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-center py-1.5 rounded-lg text-xs font-medium transition flex items-center justify-center gap-1">
+                <i class="fa-solid fa-diamond-turn-right"></i> 導航
+              </a>
+            </div>
+          </div>
+        `;
+
+        marker.bindPopup(popupContent);
+        markerClusterGroup.addLayer(marker);
+        markersMap.set(station.id, marker);
+      });
+    }
+
+    // 取得不同車輛狀態對應的顏色
+    function getStatusColorClass(station) {
+      if (!station.act) return { bg: 'bg-slate-400', text: 'text-slate-400' };
+      if (station.sbi >= 5) return { bg: 'bg-emerald-500', text: 'text-emerald-500' };
+      if (station.sbi >= 1) return { bg: 'bg-amber-500', text: 'text-amber-500' };
+      return { bg: 'bg-rose-500', text: 'text-rose-500' };
+    }
+
+    // 套用過濾條件 (關鍵字、行政區、車輛狀態)
+    function applyFilters() {
+      const searchKeyword = document.getElementById('searchInput').value.trim().toLowerCase();
+      const selectedDistrict = document.getElementById('districtFilter').value;
+      const selectedStatus = document.getElementById('statusFilter').value;
+
+      filteredDataList = rawDataList.filter(item => {
+        // 1. 搜尋比對
+        const matchSearch = !searchKeyword || 
+          item.name.toLowerCase().includes(searchKeyword) || 
+          item.address.toLowerCase().includes(searchKeyword);
+
+        // 2. 行政區比對
+        const matchDistrict = selectedDistrict === 'all' || item.district === selectedDistrict;
+
+        // 3. 車輛狀態比對
+        let matchStatus = true;
+        if (selectedStatus === 'available') matchStatus = item.sbi > 0;
+        else if (selectedStatus === 'empty_slots') matchStatus = item.bemp > 0;
+        else if (selectedStatus === 'empty') matchStatus = item.sbi === 0;
+        else if (selectedStatus === 'favorite') matchStatus = favoriteIds.includes(item.id);
+
+        return matchSearch && matchDistrict && matchStatus;
+      });
+
+      // 更新側邊欄列表與地圖 Marker
+      renderStationList(filteredDataList);
+      renderMarkers(filteredDataList);
+      updateStatistics(filteredDataList);
+    }
+
+    // 渲染側邊欄清單內容
+    function renderStationList(list) {
+      const listContainer = document.getElementById('stationList');
+      if (list.length === 0) {
+        listContainer.innerHTML = `
+          <div class="text-center py-12 text-slate-400">
+            <i class="fa-solid fa-magnifying-glass text-2xl mb-2"></i>
+            <p class="text-xs">沒有找到符合條件的站點</p>
+          </div>
+        `;
+        return;
+      }
+
+      listContainer.innerHTML = list.map(station => {
+        const isFav = favoriteIds.includes(station.id);
+        const statusColor = getStatusColorClass(station);
+
+        return `
+          <div onclick="focusStation('${station.id}')" class="bg-white p-3 rounded-xl border border-slate-200 hover:border-emerald-500 hover:shadow-md transition cursor-pointer group">
+            <div class="flex justify-between items-start mb-1.5">
+              <div>
+                <span class="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium">${station.district}</span>
+                <h4 class="font-bold text-slate-800 text-sm group-hover:text-emerald-600 transition">YouBike 2.0_${station.name}</h4>
+              </div>
+              <button onclick="event.stopPropagation(); toggleFavorite('${station.id}')" class="text-slate-300 hover:text-amber-400">
+                <i class="fa-${isFav ? 'solid text-amber-400' : 'regular'} fa-star text-sm"></i>
+              </button>
+            </div>
+            
+            <p class="text-[11px] text-slate-400 truncate mb-2">${station.address}</p>
+
+            <div class="flex items-center justify-between text-xs">
+              <div class="flex items-center gap-3">
+                <span class="font-semibold ${station.sbi > 0 ? 'text-emerald-600' : 'text-rose-500'}">
+                  <i class="fa-solid fa-bicycle"></i> 可借: ${station.sbi}
+                </span>
+                <span class="text-slate-500">
+                  <i class="fa-solid fa-square-parking"></i> 可還: ${station.bemp}
+                </span>
+              </div>
+              <span class="text-[10px] text-slate-400">${station.updateTime}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 聚焦並放大至特定站點
+    function focusStation(id) {
+      const station = rawDataList.find(s => s.id === id);
+      const marker = markersMap.get(id);
+
+      if (station && map) {
+        map.flyTo([station.lat, station.lng], 17, { duration: 1.2 });
+        if (marker) {
+          setTimeout(() => {
+            markerClusterGroup.zoomToShowLayer(marker, () => {
+              marker.openPopup();
+            });
+          }, 300);
+        }
+
+        // 手機版自動關閉側邊欄
+        if (window.innerWidth < 768) {
+          document.getElementById('sidebar').classList.add('-translate-x-full');
+        }
+      }
+    }
+
+    // 更新行政區選單
+    function updateDistrictDropdown() {
+      const districts = [...new Set(rawDataList.map(item => item.district))].sort();
+      const districtFilter = document.getElementById('districtFilter');
+      
+      districtFilter.innerHTML = `<option value="all">所有行政區 (${districts.length})</option>` +
+        districts.map(d => `<option value="${d}">${d}</option>`).join('');
+    }
+
+    // 更新即時數據指標儀表板
+    function updateStatistics(dataList) {
+      const totalStations = dataList.length;
+      const totalAvailable = dataList.reduce((acc, curr) => acc + curr.sbi, 0);
+      const totalEmpty = dataList.reduce((acc, curr) => acc + curr.bemp, 0);
+
+      document.getElementById('statTotalStations').textContent = totalStations.toLocaleString();
+      document.getElementById('statAvailableBikes').textContent = totalAvailable.toLocaleString();
+      document.getElementById('statEmptySlots').textContent = totalEmpty.toLocaleString();
+    }
+
+    // 收藏機制 Toggle
+    function toggleFavorite(id) {
+      if (favoriteIds.includes(id)) {
+        favoriteIds = favoriteIds.filter(fId => fId !== id);
+      } else {
+        favoriteIds.push(id);
+      }
+      localStorage.setItem('yb_favorites', JSON.stringify(favoriteIds));
+      applyFilters();
+    }
+
+    // 使用者 GPS 定位功能
+    function locateUser() {
+      if (!navigator.geolocation) {
+        alert('您的瀏覽器不支援定位功能');
+        return;
+      }
+
+      const btnLocate = document.getElementById('btnLocate');
+      btnLocate.classList.add('opacity-75');
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const lat = position.coords.latitude;
+          const lng = position.coords.longitude;
+
+          if (userMarker) map.removeLayer(userMarker);
+
+          // 建立目前位置標記
+          const userIcon = L.divIcon({
+            className: 'user-position-marker',
+            html: `
+              <div class="relative flex items-center justify-center w-6 h-6">
+                <span class="pulse-location absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-4 w-4 bg-sky-600 border-2 border-white shadow-md"></span>
+              </div>
+            `,
+            iconSize: [24, 24],
+            iconAnchor: [12, 12]
+          });
+
+          userMarker = L.marker([lat, lng], { icon: userIcon }).addTo(map);
+          userMarker.bindPopup('<div class="p-2 font-bold text-xs text-slate-700">📍 您目前的位置</div>').openPopup();
+
+          map.flyTo([lat, lng], 16, { duration: 1.5 });
+          btnLocate.classList.remove('opacity-75');
+        },
+        (error) => {
+          btnLocate.classList.remove('opacity-75');
+          alert('無法取得您的位置，請確認已授權定位權限。');
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    }
+
+    // 自動更新計時器
+    function startCountdown() {
+      if (countdownTimer) clearInterval(countdownTimer);
+      countdownSec = 60;
+      
+      countdownTimer = setInterval(() => {
+        countdownSec--;
+        document.getElementById('countdown').textContent = countdownSec;
+
+        if (countdownSec <= 0) {
+          fetchCityData(currentCityKey);
+        }
+      }, 1000);
+    }
+
+    function resetCountdown() {
+      countdownSec = 60;
+      document.getElementById('countdown').textContent = countdownSec;
+    }
+
+    // 設定 UI 事件監聽器
+    function setupEventListeners() {
+      // 切換縣市資料源
+      document.getElementById('citySelect').addEventListener('change', (e) => {
+        currentCityKey = e.target.value;
+        const config = API_CONFIGS[currentCityKey];
+        map.flyTo(config.center, config.zoom);
+        fetchCityData(currentCityKey);
+      });
+
+      // 搜尋與篩選事件
+      const searchInput = document.getElementById('searchInput');
+      const btnClearSearch = document.getElementById('btnClearSearch');
+
+      searchInput.addEventListener('input', (e) => {
+        if (e.target.value.length > 0) {
+          btnClearSearch.classList.remove('hidden');
+        } else {
+          btnClearSearch.classList.add('hidden');
+        }
+        applyFilters();
+      });
+
+      btnClearSearch.addEventListener('click', () => {
+        searchInput.value = '';
+        btnClearSearch.classList.add('hidden');
+        applyFilters();
+      });
+
+      document.getElementById('districtFilter').addEventListener('change', applyFilters);
+      document.getElementById('statusFilter').addEventListener('change', applyFilters);
+
+      // 按鈕功能綁定
+      document.getElementById('btnFetchData').addEventListener('click', () => {
+        fetchCityData(currentCityKey);
+      });
+
+      document.getElementById('btnLocate').addEventListener('click', locateUser);
+
+      // 手機版側邊欄切換
+      const sidebar = document.getElementById('sidebar');
+      document.getElementById('btnToggleSidebar').addEventListener('click', () => {
+        sidebar.classList.toggle('-translate-x-full');
+      });
+      document.getElementById('btnCloseSidebar').addEventListener('click', () => {
+        sidebar.classList.add('-translate-x-full');
+      });
+
+      // 地圖底圖風格切換
+      document.getElementById('btnTileStandard').addEventListener('click', (e) => {
+        switchTileLayer(TILE_LAYERS.standard, e.target);
+      });
+
+      document.getElementById('btnTileLight').addEventListener('click', (e) => {
+        switchTileLayer(TILE_LAYERS.light, e.target);
+      });
+    }
+
+    // 底圖更換輔助函式
+    function switchTileLayer(newLayer, activeBtn) {
+      if (activeTileLayer) map.removeLayer(activeTileLayer);
+      activeTileLayer = newLayer;
+      activeTileLayer.addTo(map);
+
+      // 更新按鈕樣式
+      document.querySelectorAll('#btnTileStandard, #btnTileLight').forEach(btn => {
+        btn.className = 'px-2.5 py-1 text-xs font-medium rounded text-slate-600 hover:bg-slate-100 transition';
+      });
+      activeBtn.className = 'px-2.5 py-1 text-xs font-medium rounded bg-emerald-600 text-white transition';
+    }
+
+    // 顯示載入中狀態
+    function showLoadingState() {
+      document.getElementById('stationList').innerHTML = `
+        <div class="text-center py-12 text-slate-400 text-xs">
+          <i class="fa-solid fa-arrows-rotate animate-spin text-xl mb-2 text-emerald-500"></i>
+          <p>正在載入開放資料中...</p>
+        </div>
+      `;
+    }
+
+    // 時間格式轉換工具 (YYMMDDhhmmss -> hh:mm:ss)
+    function formatTime(mdayStr) {
+      if (!mdayStr || mdayStr.length < 14) return '即時';
+      const hh = mdayStr.substring(8, 10);
+      const mm = mdayStr.substring(10, 12);
+      const ss = mdayStr.substring(12, 14);
+      return `${hh}:${mm}:${ss}`;
+    }
+
+    // 備援示範資料（當 Open API 無法連線時確保地圖依然能展示）
+    function generateFallbackData(cityKey) {
+      const baseCenter = API_CONFIGS[cityKey].center;
+      const districts = cityKey === 'taipei' ? ['信義區', '大安區', '中山區'] : ['板橋區', '三重區', '新莊區'];
+      
+      const fallbackList = [];
+      for (let i = 1; i <= 25; i++) {
+        const tot = Math.floor(Math.random() * 20) + 10;
+        const sbi = Math.floor(Math.random() * (tot + 1));
+        const district = districts[i % districts.length];
+        
+        fallbackList.push({
+          id: `demo_${cityKey}_${i}`,
+          name: `示範站點 ${i} 號`,
+          district: district,
+          address: `${district}示範路 ${i * 10} 號`,
+          tot: tot,
+          sbi: sbi,
+          bemp: tot - sbi,
+          act: true,
+          lat: baseCenter[0] + (Math.random() - 0.5) * 0.03,
+          lng: baseCenter[1] + (Math.random() - 0.5) * 0.03,
+          updateTime: '即時模擬'
+        });
+      }
+      return fallbackList;
+    }
+  </script>
+</body>
+</html>
